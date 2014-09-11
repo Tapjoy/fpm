@@ -52,17 +52,22 @@ function main() {
 
 # check if this slug is already running and exit unless `force` specified
 function slug_already_current(){
-    if [ "$FORCE" == "1" ] ; then
-        log "Force was specified. Proceeding with install."
-        return 1;
-    fi
-
     local this_slug=$(basename $0 .slug)
     local current=$(basename $(readlink ${INSTALL_ROOT}/current))
     log "'current' symlink points to slug: ${current}"
 
     if [ "$this_slug" == "$current" ] ; then
-        return 0;
+        if [ "$FORCE" == "1" ] ; then
+        log "Force was specified. Proceeding with install after renaming live directory to allow running service to shutdown correctly."
+            local real_dir=$(readlink ${INSTALL_ROOT})
+            if [ -f ${real_dir}.old ] ; then
+                # remove that .old directory, if needed
+                rm -rf ${real_dir}.old
+            fi
+            mv ${real_dir} ${real_dir}.old
+        else
+            return 0;
+        if
     fi
     return 1;
 }

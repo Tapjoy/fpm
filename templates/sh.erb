@@ -51,18 +51,25 @@ function main() {
 }
 
 # check if this slug is already running and exit unless `force` specified
+# Note: this only works with RELEASE_ID is used
 function slug_already_current(){
-    if [ "$FORCE" == "1" ] ; then
-        log "Force was specified. Proceeding with install."
-        return 1;
-    fi
-
     local this_slug=$(basename $0 .slug)
-    local current=$(basename $(readlink ${INSTALL_ROOT}/current))
+    local current=$(basename "$(readlink ${INSTALL_ROOT}/current)")
     log "'current' symlink points to slug: ${current}"
 
     if [ "$this_slug" == "$current" ] ; then
-        return 0;
+        if [ "$FORCE" == "1" ] ; then
+        log "Force was specified. Proceeding with install after renaming live directory to allow running service to shutdown correctly."
+            local real_dir=$(readlink ${INSTALL_ROOT}/current)
+            if [ -f ${real_dir}.old ] ; then
+                # remove that .old directory, if needed
+                rm -rf ${real_dir}.old
+            fi
+            mv ${real_dir} ${real_dir}.old
+            mkdir -p ${real_dir}
+        else
+            return 0;
+        fi
     fi
     return 1;
 }
@@ -127,8 +134,8 @@ function save_environment(){
     echo -n "" > ${METADATA} # empty file
 
     # just piping env to a file doesn't quote the variables. This does
-    # filter out multiline junk and _. _ is a readonly variable
-    env | egrep "^[^ ]+=.*" | grep -v "^_=" | while read ENVVAR ; do
+    # filter out multiline junk, _, and functions. _ is a readonly variable.
+    env | grep -v "^_=" | grep -v "^[^=(]*()=" | egrep "^[^ ]+=" | while read ENVVAR ; do
         local NAME=${ENVVAR%%=*}
         # sed is to preserve variable values with dollars (for escaped variables or $() style command replacement),
         # and command replacement backticks
@@ -150,7 +157,7 @@ function set_install_dir(){
 
     DATESTAMP=$(date +%Y%m%d%H%M%S)
     if [ -z "$USE_FLAT_RELEASE_DIRECTORY" ] ; then
-        RELEASE_ID=<%= release_id %>
+        <%= "RELEASE_ID=#{release_id}" if respond_to?(:release_id) %>
         INSTALL_DIR="${RELEASES_DIR}/${RELEASE_ID:-$DATESTAMP}"
     fi
 

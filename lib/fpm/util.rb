@@ -56,7 +56,7 @@ module FPM::Util
       raise ExecutableNotFound.new(program)
     end
 
-    @logger.debug("Running command", :args => args)
+    logger.debug("Running command", :args => args)
 
     # Create a pair of pipes to connect the
     # invoked process to the cabin logger
@@ -69,10 +69,10 @@ module FPM::Util
 
     process.start
     stdout_w.close; stderr_w.close
-    @logger.debug('Process is running', :pid => process.pid)
+    logger.debug('Process is running', :pid => process.pid)
     # Log both stdout and stderr as 'info' because nobody uses stderr for
     # actually reporting errors and as a result 'stderr' is a misnomer.
-    @logger.pipe(stdout_r => :info, stderr_r => :info)
+    logger.pipe(stdout_r => :info, stderr_r => :info)
 
     process.wait
     success = (process.exit_code == 0)
@@ -95,7 +95,7 @@ module FPM::Util
       raise ExecutableNotFound.new(program)
     end
 
-    @logger.debug("Running command", :args => args)
+    logger.debug("Running command", :args => args)
 
     stdout_r, stdout_w = IO.pipe
     stderr_r, stderr_w = IO.pipe
@@ -108,7 +108,7 @@ module FPM::Util
     stdout_w.close; stderr_w.close
     stdout_r_str = stdout_r.read
     stdout_r.close; stderr_r.close
-    @logger.debug("Process is running", :pid => process.pid)
+    logger.debug("Process is running", :pid => process.pid)
 
     process.wait
     success = (process.exit_code == 0)
@@ -166,7 +166,65 @@ module FPM::Util
     when 'directory'
       FileUtils.mkdir(dst) unless File.exists? dst
     else
-      FileUtils.copy_entry(src, dst)
+      # if the file with the same dev and inode has been copied already -
+      # hard link it's copy to `dst`, otherwise make an actual copy
+      st = File.lstat(src)
+      known_entry = copied_entries[[st.dev, st.ino]]
+      if known_entry
+        FileUtils.ln(known_entry, dst)
+      else
+        FileUtils.copy_entry(src, dst)
+        copied_entries[[st.dev, st.ino]] = dst
+      end
+    end # else...
+  end # def copy_entry
+
+  def copied_entries
+    # TODO(sissel): I wonder that this entry-copy knowledge needs to be put
+    # into a separate class/module. As is, calling copy_entry the same way
+    # in slightly different contexts will result in weird or bad behavior.
+    # What I mean is if we do:
+    #   pkg = FPM::Package::Dir...
+    #   pkg.output()...
+    #   pkg.output()...
+    # The 2nd output call will fail or behave weirdly because @copied_entries
+    # is already populated. even though this is anew round of copying.
+    return @copied_entries ||= {}
+  end # def copied_entries
+
+  def expand_pessimistic_constraints(constraint)
+    name, op, version = constraint.split(/\s+/)
+
+    if op == '~>'
+
+      new_lower_constraint = "#{name} >= #{version}"
+
+      version_components = version.split('.').collect { |v| v.to_i }
+
+      version_prefix = version_components[0..-3].join('.')
+      portion_to_work_with = version_components.last(2)
+
+      prefix = ''
+      unless version_prefix.empty?
+        prefix = version_prefix + '.'
+      end
+
+      one_to_increment = portion_to_work_with[0].to_i
+      incremented = one_to_increment + 1
+
+      new_version = ''+ incremented.to_s + '.0'
+
+      upper_version = prefix + new_version
+
+      new_upper_constraint = "#{name} < #{upper_version}"
+
+      return [new_lower_constraint,new_upper_constraint]
+    else
+      return [constraint]
     end
-  end
+  end #def expand_pesimistic_constraints
+
+  def logger
+    @logger ||= Cabin::Channel.get
+  end # def logger
 end # module FPM::Util

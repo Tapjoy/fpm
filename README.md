@@ -1,4 +1,4 @@
-# Effing Package Management.
+# Effing Package Management
 
 ## Preface
 
@@ -62,6 +62,19 @@ The goal of FPM is to be able to easily build platform-native packages.
 * Tweaking existing packages (removing files, changing metadata/dependencies)
 * Stripping pre/post/maintainer scripts from packages
 
+## System packages
+
+Many Linux distros do not ship ruby C headers or a compiler by default, and
+you'll need that to install fpm.
+
+    apt-get install ruby-dev gcc
+    
+    yum install ruby-devel gcc
+
+Additional packages will be required depending on the source and target package
+types (rpmbuild for rpm, etc.). FPM will show the commands that are required
+which you must map to your distribution's package names.
+
 ## Get with the download
 
 You can install fpm with gem:
@@ -72,7 +85,8 @@ Building a package named "awesome" might look something like this:
 
     fpm -s <source type> -t <target type> [list of sources]...
 
-"Source type" is what your package is coming from; a directory (dir), a rubygem (gem), an rpm (rpm), a python package (python), a php pear module (pear), etc.
+"Source type" is what your package is coming from; a directory (dir), a rubygem
+(gem), an rpm (rpm), a python package (python), a php pear module (pear), etc.
 
 "Target type" is what your output package form should be. Most common are "rpm"
 and "deb" but others exist (solaris, etc)
@@ -139,6 +153,10 @@ That said, some basic guidelines, which you are free to ignore :)
 
 ### Contributing by forking from GitHub
 
+Please note that this project is released with a Contributor Code of Conduct.
+By participating in this project you agree to abide by its terms. See
+the [CODE\_OF\_CONDUCT.md](CODE_OF_CONDUCT.md).
+
 First, create a github account if you do not already have one.  Log in to
 github and go to [the main fpm github page](https://github.com/jordansissel/fpm).
 
@@ -176,6 +194,17 @@ your commit back to master.
 If you think your changes are ready to be merged back to the main fpm repo, you
 can generate a pull request on the github website for your repo and send it in
 for review.
+
+##Problems running bundle install?
+
+If you are installing on Mac OS 10.9 (Mavericks) you will need to make sure that 
+you have the standalone command line tools seperate from Xcode:
+
+    $ xcode-select --install
+
+Finally, click the install button on the prompt that appears.
+
+
 
 ## More Documentation
 

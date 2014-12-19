@@ -58,8 +58,21 @@ class FPM::Command < Clamp::Command
   option ["-f", "--force"], :flag, "Force output even if it will overwrite an " \
     "existing file", :default => false
   option ["-n", "--name"], "NAME", "The name to give to the package"
+
+  loglevels = %w(error warn info debug)
+  option "--log", "LEVEL", "Set the log level. Values: #{loglevels.join(", ")}.",
+    :attribute_name => :log_level do |val|
+    val.downcase.tap do |v|
+      if !loglevels.include?(v)
+        raise FPM::Package::InvalidArgument, "Invalid log level, #{v.inspect}. Must be one of: #{loglevels.join(", ")}"
+      end
+    end
+  end # --log
   option "--verbose", :flag, "Enable verbose output"
   option "--debug", :flag, "Enable debug output"
+  option "--debug-workspace", :flag, "Keep any file workspaces around for " \
+    "debugging. This will disable automatic cleanup of package staging and " \
+    "build paths. It will also print which directories are available."
   option ["-v", "--version"], "VERSION", "The version to give to the package",
     :default => 1.0
   option "--iteration", "ITERATION",
@@ -82,11 +95,11 @@ class FPM::Command < Clamp::Command
   option "--no-depends", :flag, "Do not list any dependencies in this package",
     :default => false
 
-  option "--no-auto-depends", :flag, "Do not list any dependencies in this" \
+  option "--no-auto-depends", :flag, "Do not list any dependencies in this " \
     "package automatically", :default => false
 
   option "--provides", "PROVIDES",
-    "What this package provides (usually a name). This flag can be "\
+    "What this package provides (usually a name). This flag can be " \
     "specified multiple times.", :multivalued => true,
     :attribute_name => :provides
   option "--conflicts", "CONFLICTS",
@@ -94,14 +107,15 @@ class FPM::Command < Clamp::Command
     "specified multiple times.", :multivalued => true,
     :attribute_name => :conflicts
   option "--replaces", "REPLACES",
-    "Other packages/versions this package replaces. This flag can be "\
+    "Other packages/versions this package replaces. This flag can be " \
     "specified multiple times.", :multivalued => true,
     :attribute_name => :replaces
 
   option "--config-files", "CONFIG_FILES",
     "Mark a file in the package as being a config file. This uses 'conffiles'" \
     " in debs and %config in rpm. If you have multiple files to mark as " \
-    "configuration files, specify this flag multiple times.",
+    "configuration files, specify this flag multiple times.  If argument is " \
+    "directory all files inside it will be recursively marked as config files.",
     :multivalued => true, :attribute_name => :config_files
   option "--directories", "DIRECTORIES", "Recursively mark a directory as being owned " \
     "by the package", :multivalued => true, :attribute_name => :directories
@@ -138,42 +152,59 @@ class FPM::Command < Clamp::Command
     "files and dirs to use as input."
 
   option "--post-install", "FILE",
-    "(DEPRECATED, use --after-install) a script to be run after " \
+    "(DEPRECATED, use --after-install) A script to be run after " \
     "package installation" do |val|
     @after_install = File.expand_path(val) # Get the full path to the script
   end # --post-install (DEPRECATED)
   option "--pre-install", "FILE",
-    "(DEPRECATED, use --before-install) a script to be run before " \
+    "(DEPRECATED, use --before-install) A script to be run before " \
     "package installation" do |val|
     @before_install = File.expand_path(val) # Get the full path to the script
   end # --pre-install (DEPRECATED)
   option "--post-uninstall", "FILE",
-      "(DEPRECATED, use --after-remove) a script to be run after " \
+      "(DEPRECATED, use --after-remove) A script to be run after " \
       "package removal" do |val|
     @after_remove = File.expand_path(val) # Get the full path to the script
   end # --post-uninstall (DEPRECATED)
   option "--pre-uninstall", "FILE",
-    "(DEPRECATED, use --before-remove) a script to be run before " \
+    "(DEPRECATED, use --before-remove) A script to be run before " \
     "package removal"  do |val|
     @before_remove = File.expand_path(val) # Get the full path to the script
   end # --pre-uninstall (DEPRECATED)
 
   option "--after-install", "FILE",
-    "a script to be run after package installation" do |val|
+    "A script to be run after package installation" do |val|
     File.expand_path(val) # Get the full path to the script
   end # --after-install
   option "--before-install", "FILE",
-    "a script to be run before package installation" do |val|
+    "A script to be run before package installation" do |val|
     File.expand_path(val) # Get the full path to the script
-  end # --pre-install
+  end # --before-install
   option "--after-remove", "FILE",
-    "a script to be run after package removal" do |val|
+    "A script to be run after package removal" do |val|
     File.expand_path(val) # Get the full path to the script
   end # --after-remove
   option "--before-remove", "FILE",
-    "a script to be run before package removal" do |val|
+    "A script to be run before package removal" do |val|
     File.expand_path(val) # Get the full path to the script
   end # --before-remove
+  option "--after-upgrade", "FILE",
+    "A script to be run after package upgrade. If not specified,\n" \
+        "--before-install, --after-install, --before-remove, and \n" \
+        "--after-remove wil behave in a backwards-compatible manner\n" \
+        "(they will not be upgrade-case aware).\n" \
+        "Currently only supports deb and rpm packages." do |val|
+    File.expand_path(val) # Get the full path to the script
+  end # --after-upgrade
+  option "--before-upgrade", "FILE",
+    "A script to be run before package upgrade. If not specified,\n" \
+        "--before-install, --after-install, --before-remove, and \n" \
+        "--after-remove wil behave in a backwards-compatible manner\n" \
+        "(they will not be upgrade-case aware).\n" \
+        "Currently only supports deb and rpm packages." do |val|
+    File.expand_path(val) # Get the full path to the script
+  end # --before-upgrade
+
   option "--template-scripts", :flag,
     "Allow scripts to be templated. This lets you use ERB to template your " \
     "packaging scripts (for --after-install, etc). For example, you can do " \
@@ -190,8 +221,8 @@ class FPM::Command < Clamp::Command
   end
 
   option "--workdir", "WORKDIR",
-    "The directory you want fpm to do its work in, where 'work' is any file" \
-    "copying, downloading, etc. Roughly any scratch space fpm needs to build" \
+    "The directory you want fpm to do its work in, where 'work' is any file " \
+    "copying, downloading, etc. Roughly any scratch space fpm needs to build " \
     "your package.", :default => Dir.tmpdir
 
   parameter "[ARGS] ...",
@@ -217,10 +248,22 @@ class FPM::Command < Clamp::Command
 
   # Execute this command. See Clamp::Command#execute and Clamp's documentation
   def execute
-    @logger.level = :warn
+    # Short-circuit if someone simply runs `fpm --version`
+    if ARGV == [ "--version" ]
+      puts FPM::VERSION
+      return 0
+    end
+
+    logger.level = :warn
+    logger.level = :info if verbose? # --verbose
+    logger.level = :debug if debug? # --debug
+    if log_level
+      logger.level = log_level.to_sym
+    end
+
 
     if (stray_flags = args.grep(/^-/); stray_flags.any?)
-      @logger.warn("All flags should be before the first argument " \
+      logger.warn("All flags should be before the first argument " \
                    "(stray flags found: #{stray_flags}")
     end
 
@@ -229,27 +272,24 @@ class FPM::Command < Clamp::Command
     # fpm would assume you meant to add '.' to the end of the commandline.
     # Let's hack that. https://github.com/jordansissel/fpm/issues/187
     if input_type == "dir" and args.empty? and !chdir.nil?
-      @logger.info("No args, but -s dir and -C are given, assuming '.' as input") 
+      logger.info("No args, but -s dir and -C are given, assuming '.' as input") 
       args << "."
     end
 
-    @logger.info("Setting workdir", :workdir => workdir)
+    logger.info("Setting workdir", :workdir => workdir)
     ENV["TMP"] = workdir
 
     validator = Validator.new(self)
     if !validator.ok?
       validator.messages.each do |message|
-        @logger.warn(message)
+        logger.warn(message)
       end
 
-      @logger.fatal("Fix the above problems, and you'll be rolling packages in no time!")
+      logger.fatal("Fix the above problems, and you'll be rolling packages in no time!")
       return 1
     end
     input_class = FPM::Package.types[input_type]
     output_class = FPM::Package.types[output_type]
-
-    @logger.level = :info if verbose? # --verbose
-    @logger.level = :debug if debug? # --debug
 
     input = input_class.new
 
@@ -280,7 +320,7 @@ class FPM::Command < Clamp::Command
         input.attributes["#{attr}_given?".to_sym] = flag_given
         attr = "#{attr}?" if !respond_to?(attr) # handle boolean :flag cases
         input.attributes[attr.to_sym] = send(attr) if respond_to?(attr)
-        @logger.debug("Setting attribute", attr.to_sym => send(attr))
+        logger.debug("Setting attribute", attr.to_sym => send(attr))
       end
     end
 
@@ -295,7 +335,7 @@ class FPM::Command < Clamp::Command
     # If --inputs was specified, read it as a file.
     if !inputs.nil?
       if !File.exists?(inputs)
-        @logger.fatal("File given for --inputs does not exist (#{inputs})")
+        logger.fatal("File given for --inputs does not exist (#{inputs})")
         return 1
       end
 
@@ -316,7 +356,7 @@ class FPM::Command < Clamp::Command
       # if the package's attribute is currently nil *or* the flag setting for this
       # attribute is non-default, use the value.
       if object.send(attribute).nil? || send(attribute) != send("default_#{attribute}")
-        @logger.info("Setting from flags: #{attribute}=#{send(attribute)}")
+        logger.info("Setting from flags: #{attribute}=#{send(attribute)}")
         object.send("#{attribute}=", send(attribute))
       end
     end
@@ -339,6 +379,16 @@ class FPM::Command < Clamp::Command
     input.replaces += replaces
     input.config_files += config_files
     input.directories += directories
+
+    h = {}
+    attrs.each do | e |
+
+      s = e.split(':', 2)
+      h[s.last] = s.first
+    end
+
+    input.attrs = h
+
     
     script_errors = []
     setscript = proc do |scriptname|
@@ -349,7 +399,7 @@ class FPM::Command < Clamp::Command
       next if path.nil?
 
       if !File.exists?(path)
-        @logger.error("No such file (for #{scriptname.to_s}): #{path.inspect}")
+        logger.error("No such file (for #{scriptname.to_s}): #{path.inspect}")
         script_errors << path
       end
 
@@ -361,6 +411,8 @@ class FPM::Command < Clamp::Command
     setscript.call(:after_install)
     setscript.call(:before_remove)
     setscript.call(:after_remove)
+    setscript.call(:before_upgrade)
+    setscript.call(:after_upgrade)
 
     # Bail if any setscript calls had errors. We don't need to log
     # anything because we've already logged the error(s) above.
@@ -368,7 +420,7 @@ class FPM::Command < Clamp::Command
 
     # Validate the package
     if input.name.nil? or input.name.empty?
-      @logger.fatal("No name given for this package (set name with, " \
+      logger.fatal("No name given for this package (set name with '-n', " \
                     "for example, '-n packagename')")
       return 1
     end
@@ -385,39 +437,55 @@ class FPM::Command < Clamp::Command
 
     # Write the output somewhere, package can be nil if no --package is specified, 
     # and that's OK.
-    package_file = output.to_s(package)
+    
+    # If the package output (-p flag) is a directory, write to the default file name
+    # but inside that directory.
+    if ! package.nil? && File.directory?(package)
+      package_file = File.join(package, output.to_s)
+    else
+      package_file = output.to_s(package)
+    end
+
     begin
       output.output(package_file)
     rescue FPM::Package::FileAlreadyExists => e
-      @logger.fatal(e.message)
+      logger.fatal(e.message)
       return 1
     rescue FPM::Package::ParentDirectoryMissing => e
-      @logger.fatal(e.message)
+      logger.fatal(e.message)
       return 1
     end
 
-    @logger.log("Created package", :path => package_file)
+    logger.log("Created package", :path => package_file)
     return 0
   rescue FPM::Util::ExecutableNotFound => e
-    @logger.error("Need executable '#{e}' to convert #{input_type} to #{output_type}")
+    logger.error("Need executable '#{e}' to convert #{input_type} to #{output_type}")
     return 1
   rescue FPM::InvalidPackageConfiguration => e
-    @logger.error("Invalid package configuration: #{e}")
-    return 1
-  rescue FPM::Package::InvalidArgument => e
-    @logger.error("Invalid package argument: #{e}")
+    logger.error("Invalid package configuration: #{e}")
     return 1
   rescue FPM::Util::ProcessFailed => e
-    @logger.error("Process failed: #{e}")
+    logger.error("Process failed: #{e}")
     return 1
   ensure
-    input.cleanup unless input.nil?
-    output.cleanup unless output.nil?
+    if debug_workspace?
+      # only emit them if they have files
+      [input, output].each do |plugin|
+        next if plugin.nil?
+        [:staging_path, :build_path].each do |pathtype|
+          path = plugin.send(pathtype)
+          next unless Dir.open(path).to_a.size > 2
+          logger.log("plugin directory", :plugin => plugin.type, :pathtype => pathtype, :path => path)
+        end
+      end
+    else
+      input.cleanup unless input.nil?
+      output.cleanup unless output.nil?
+    end
   end # def execute
 
   def run(*args)
-    @logger = Cabin::Channel.get
-    @logger.subscribe(STDOUT)
+    logger.subscribe(STDOUT)
 
     # fpm initialization files, note the order of the following array is
     # important, try .fpm in users home directory first and then the current
@@ -427,7 +495,7 @@ class FPM::Command < Clamp::Command
 
     rc_files.each do |rc_file|
       if File.readable? rc_file
-        @logger.warn("Loading flags from rc file #{rc_file}")
+        logger.warn("Loading flags from rc file #{rc_file}")
         File.readlines(rc_file).each do |line|
           # reverse becasue 'unshift' pushes onto the left side of the array.
           Shellwords.shellsplit(line).reverse.each do |arg|
@@ -440,6 +508,9 @@ class FPM::Command < Clamp::Command
     end
 
     super(*args)
+  rescue FPM::Package::InvalidArgument => e
+    logger.error("Invalid package argument: #{e}")
+    return 1
   end # def run
 
   # A simple flag validator

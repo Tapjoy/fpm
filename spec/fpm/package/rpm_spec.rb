@@ -81,7 +81,7 @@ describe FPM::Package::RPM do
       end
 
       it "should set the user and group of each file in the RPM" do
-        subject.rpmspec.should include('%defattr(-,root,root,-')
+        expect(subject.rpmspec).to include('%defattr(-,root,root,-')
       end
     end # context
 
@@ -105,12 +105,29 @@ describe FPM::Package::RPM do
       end
 
       it "should set the user and group of each file in the RPM" do
-        subject.rpmspec.should include('%defattr(-,some_user,some_group,-')
+        expect(subject.rpmspec).to include('%defattr(-,some_user,some_group,-')
       end
     end # context
   end
 
   describe "#output", :if => program_exists?("rpmbuild") do
+    context "architecture" do
+      it "can be basically anything" do
+        subject.name = "example"
+        subject.architecture = "fancypants"
+        subject.version = "1.0"
+        target = Stud::Temporary.pathname
+
+        # Should not fail.
+        subject.output(target)
+
+        # Verify the arch tag.
+        rpm = ::RPM::File.new(target)
+        insist { rpm.tags[:arch] } == subject.architecture
+
+        File.unlink(target)
+      end
+    end
     context "package attributes" do
       before :each do
         @target = Stud::Temporary.pathname
@@ -133,6 +150,16 @@ describe FPM::Package::RPM do
         subject.scripts[:after_install] = "example after_install"
         subject.scripts[:before_remove] = "example before_remove"
         subject.scripts[:after_remove] = "example after_remove"
+        subject.scripts[:rpm_verifyscript] = "example rpm_verifyscript"
+        subject.scripts[:rpm_posttrans] = "example rpm_posttrans"
+        subject.scripts[:rpm_pretrans] = "example rpm_pretrans"
+
+
+        # Test for triggers #626
+        subject.attributes[:rpm_trigger_before_install] = [["test","#!/bin/sh\necho before_install trigger executed\n"]]
+        subject.attributes[:rpm_trigger_after_install] = [["test","#!/bin/sh\necho after_install trigger executed\n"]]
+        subject.attributes[:rpm_trigger_before_uninstall] = [["test","#!/bin/sh\necho before_uninstall trigger executed\n"]]
+        subject.attributes[:rpm_trigger_after_target_uninstall] = [["test","#!/bin/sh\necho after_target_uninstall trigger executed\n"]]
 
         # Write the rpm out
         subject.output(@target)
@@ -215,6 +242,21 @@ describe FPM::Package::RPM do
         insist { @rpm.tags[:postunprog] } == "/bin/sh"
       end
 
+      it "should have the correct 'verify' script" do
+        insist { @rpm.tags[:verifyscript] } == "example rpm_verifyscript"
+        insist { @rpm.tags[:verifyscriptprog] } == "/bin/sh"
+      end
+
+      it "should have the correct 'pretrans' script" do
+        insist { @rpm.tags[:pretrans] } == "example rpm_pretrans"
+        insist { @rpm.tags[:pretransprog] } == "/bin/sh"
+      end
+
+      it "should have the correct 'posttrans' script" do
+        insist { @rpm.tags[:posttrans] } == "example rpm_posttrans"
+        insist { @rpm.tags[:posttransprog] } == "/bin/sh"
+      end
+
       it "should have the correct 'prein' script" do
         insist { @rpm.tags[:prein] } == "example before_install"
         insist { @rpm.tags[:preinprog] } == "/bin/sh"
@@ -223,6 +265,42 @@ describe FPM::Package::RPM do
       it "should have the correct 'postin' script" do
         insist { @rpm.tags[:postin] } == "example after_install"
         insist { @rpm.tags[:postinprog] } == "/bin/sh"
+      end
+ 
+      it "should have the correct 'before_install' trigger script" do
+        insist { @rpm.tags[:triggername][0] } == "test"
+        insist { @rpm.tags[:triggerversion][0] } == ""
+        insist { @rpm.tags[:triggerflags][0] & (1 << 25)} == ( 1 << 25) # See FPM::Package::RPM#rpm_get_trigger_type
+        insist { @rpm.tags[:triggerindex][0] } == 0
+        insist { @rpm.tags[:triggerscriptprog][0] } == "/bin/sh"
+        insist { @rpm.tags[:triggerscripts][0] } == "#!/bin/sh\necho before_install trigger executed"
+      end
+
+      it "should have the correct 'after_install' trigger script" do
+        insist { @rpm.tags[:triggername][1] } == "test"
+        insist { @rpm.tags[:triggerversion][1] } == ""
+        insist { @rpm.tags[:triggerflags][1] & (1 << 16)} == ( 1 << 16) # See FPM::Package::RPM#rpm_get_trigger_type
+        insist { @rpm.tags[:triggerindex][1] } == 1
+        insist { @rpm.tags[:triggerscriptprog][1] } == "/bin/sh"
+        insist { @rpm.tags[:triggerscripts][1] } == "#!/bin/sh\necho after_install trigger executed"
+      end
+
+      it "should have the correct 'before_uninstall' trigger script" do
+        insist { @rpm.tags[:triggername][2] } == "test"
+        insist { @rpm.tags[:triggerversion][2] } == ""
+        insist { @rpm.tags[:triggerflags][2] & (1 << 17)} == ( 1 << 17) # See FPM::Package::RPM#rpm_get_trigger_type
+        insist { @rpm.tags[:triggerindex][2] } == 2
+        insist { @rpm.tags[:triggerscriptprog][2] } == "/bin/sh"
+        insist { @rpm.tags[:triggerscripts][2] } == "#!/bin/sh\necho before_uninstall trigger executed"
+      end
+
+      it "should have the correct 'after_target_uninstall' trigger script" do
+        insist { @rpm.tags[:triggername][3] } == "test"
+        insist { @rpm.tags[:triggerversion][3] } == ""
+        insist { @rpm.tags[:triggerflags][3] & (1 << 18)} == ( 1 << 18) # See FPM::Package::RPM#rpm_get_trigger_type
+        insist { @rpm.tags[:triggerindex][3] } == 3
+        insist { @rpm.tags[:triggerscriptprog][3] } == "/bin/sh"
+        insist { @rpm.tags[:triggerscripts][3] } == "#!/bin/sh\necho after_target_uninstall trigger executed"
       end
 
       it "should use md5/gzip by default" do
@@ -391,6 +469,40 @@ describe FPM::Package::RPM do
       insist { rpmtags[:release] } == "1"
     end
   end # regression stuff
+
+  describe "rpm_use_file_permissions" do
+    let(:target) { Stud::Temporary.pathname }
+    let(:rpm) { ::RPM::File.new(target) }
+    let(:path) { "hello.txt" }
+    let(:path_stat) { File.lstat(subject.staging_path(path)) }
+
+    before :each do
+      File.write(subject.staging_path(path), "Hello world")
+      subject.name = "example"
+      subject.version = "1.0"
+    end
+
+    after :each do
+      subject.cleanup
+      File.delete(target) rescue nil
+    end
+
+    it "should respect file user and group ownership", :if => program_exists?("rpmbuild") do
+      subject.attributes[:rpm_use_file_permissions?] = true
+      subject.output(target)
+      insist { rpm.tags[:fileusername].first } == Etc.getpwuid(path_stat.uid).name
+      insist { rpm.tags[:filegroupname].first } == Etc.getgrgid(path_stat.gid).name
+    end
+
+    it "rpm_group should override rpm_use_file_permissions-derived owner", :if => program_exists?("rpmbuild") do
+      subject.attributes[:rpm_use_file_permissions?] = true
+      subject.attributes[:rpm_user] = "hello"
+      subject.attributes[:rpm_group] = "world"
+      subject.output(target)
+      insist { rpm.tags[:fileusername].first } == subject.attributes[:rpm_user]
+      insist { rpm.tags[:filegroupname].first } == subject.attributes[:rpm_group]
+    end
+  end
 
   describe "#output with digest and compression settings", :if => program_exists?("rpmbuild") do
     context "bzip2/sha1" do

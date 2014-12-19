@@ -24,25 +24,17 @@ class FPM::Package::RPM < FPM::Package
 
   COMPRESSION_MAP = {
     "none" => "w0.gzdio",
-    "xz" => "w2.xzdio",
+    "xz" => "w9.xzdio",
     "gzip" => "w9.gzdio",
     "bzip2" => "w9.bzdio"
   } unless defined?(COMPRESSION_MAP)
 
   option "--use-file-permissions", :flag, 
-      "Use existing file permissions when defining ownership and modes"
+      "Use existing file permissions when defining ownership and modes."
 
-  option "--user", "USER",
-    "Set the user to USER in the %files section.", 
-    :default => 'root' do |value|
-      value
-  end
+  option "--user", "USER", "Set the user to USER in the %files section. Overrides the user when used with use-file-permissions setting."
 
-  option "--group", "GROUP",
-    "Set the group to GROUP in the %files section.",
-    :default => 'root' do |value|
-      value
-  end
+  option "--group", "GROUP", "Set the group to GROUP in the %files section. Overrides the group when used with use-file-permissions setting."
 
   option "--defattrfile", "ATTR",
     "Set the default file mode (%defattr).",
@@ -95,10 +87,22 @@ class FPM::Package::RPM < FPM::Package
   option "--sign", :flag, "Pass --sign to rpmbuild"
 
   option "--auto-add-directories", :flag, "Auto add directories not part of filesystem"
+  option "--auto-add-exclude-directories", "DIRECTORIES",
+    "Additional directories ignored by '--rpm-auto-add-directories' flag",
+    :multivalued => true, :attribute_name => :auto_add_exclude_directories
 
   option "--autoreqprov", :flag, "Enable RPM's AutoReqProv option"
   option "--autoreq", :flag, "Enable RPM's AutoReq option"
   option "--autoprov", :flag, "Enable RPM's AutoProv option"
+
+  option "--attr", "ATTRFILE",
+    "Set the attribute for a file (%attr).",
+    :multivalued => true, :attribute_name => :attrs
+  
+  option "--init", "FILEPATH", "Add FILEPATH as an init script",
+	:multivalued => true do |file|
+    next File.expand_path(file)
+  end
 
   rpmbuild_filter_from_provides = []
   option "--filter-from-provides", "REGEX",
@@ -118,8 +122,41 @@ class FPM::Package::RPM < FPM::Package
             "version. Default is to be specific. This option allows the same " \
             "version of a package but any iteration is permitted"
 
-  private
+  option "--verbatim-gem-dependencies", :flag,
+           "When converting from a gem, leave the old (fpm 0.4.x) style " \
+           "dependency names. This flag will use the old 'rubygem-foo' " \
+           "names in rpm requires instead of the redhat style " \
+           "rubygem(foo).", :default => false
 
+  option "--verifyscript", "FILE",
+    "a script to be run on verification" do |val|
+    File.expand_path(val) # Get the full path to the script
+  end # --verifyscript
+  option "--pretrans", "FILE",
+    "pretrans script" do |val|
+    File.expand_path(val) # Get the full path to the script
+  end # --pretrans
+  option "--posttrans", "FILE",
+    "posttrans script" do |val|
+    File.expand_path(val) # Get the full path to the script
+  end # --posttrans
+
+  ["before-install","after-install","before-uninstall","after-target-uninstall"].each do |trigger_type|
+     rpm_trigger = []
+     option "--trigger-#{trigger_type}", "'[OPT]PACKAGE: FILEPATH'", "Adds a rpm trigger script located in FILEPATH, " \
+            "having 'OPT' options and linking to 'PACKAGE'. PACKAGE can be a comma seperated list of packages. " \
+            "See: http://rpm.org/api/4.4.2.2/triggers.html" do |trigger|
+       match = trigger.match(/^(\[.*\]|)(.*): (.*)$/)
+       @logger.fatal("Trigger '#{trigger_type}' definition can't be parsed ('#{trigger}')") unless match
+       opt, pkg, file = match.captures
+       @logger.fatal("File given for --trigger-#{trigger_type} does not exist (#{file})") unless File.exists?(file)
+       rpm_trigger << [pkg, File.read(file), opt.tr('[]','')]
+       next rpm_trigger
+     end
+   end
+ 
+  private
+    
   # Fix path name
   # Replace [ with [\[] to make rpm not use globs
   # Replace * with [*] to make rpm not use globs
@@ -136,13 +173,26 @@ class FPM::Package::RPM < FPM::Package
   def rpm_file_entry(file)
     original_file = file
     file = rpm_fix_name(file)
-    return file unless attributes[:rpm_use_file_permissions?]
+
+    if !attributes[:rpm_use_file_permissions?]
+
+      if attrs[file].nil?
+        return file
+      else
+        return sprintf("%%attr(%s) %s\n", attrs[file], file)
+      end
+    end
+
+    return sprintf("%%attr(%s) %s\n", attrs[file], file) unless attrs[file].nil?
 
     # Stat the original filename in the relative staging path
     ::Dir.chdir(staging_path) do
-      stat = File.stat(original_file.gsub(/\"/, '').sub(/^\//,''))
-      user = Etc.getpwuid(stat.uid).name
-      group = Etc.getgrgid(stat.gid).name
+      stat = File.lstat(original_file.gsub(/\"/, '').sub(/^\//,''))
+
+      # rpm_user and rpm_group attribute should override file ownership
+      # otherwise use the current file user/group by name.
+      user = attributes[:rpm_user] || Etc.getpwuid(stat.uid).name
+      group = attributes[:rpm_group] || Etc.getgrgid(stat.gid).name
       mode = stat.mode
       return sprintf("%%attr(%o, %s, %s) %s\n", mode & 4095 , user, group, file)
     end
@@ -176,17 +226,10 @@ class FPM::Package::RPM < FPM::Package
   # See FPM::Package#converted_from
   def converted_from(origin)
     if origin == FPM::Package::Gem
-      # Gem dependency operator "~>" is not compatible with rpm. Translate any found.
       fixed_deps = []
       self.dependencies.collect do |dep|
-        name, op, version = dep.split(/\s+/)
-        if op == "~>"
-          # ~> x.y means: > x.y and < (x+1).0
-          fixed_deps << "#{name} >= #{version}"
-          fixed_deps << "#{name} < #{version.to_i + 1}.0.0"
-        else
-          fixed_deps << dep
-        end
+        # Gem dependency operator "~>" is not compatible with rpm. Translate any found.
+        fixed_deps = fixed_deps + expand_pessimistic_constraints(dep)
       end
       self.dependencies = fixed_deps
 
@@ -201,13 +244,15 @@ class FPM::Package::RPM < FPM::Package
           provides
         end
       end
-      self.dependencies = self.dependencies.collect do |dependency|
-        # Tries to match rubygem_prefix [1], gem_name [2] and version [3] if present
-        # and return it in rubygem_prefix(gem_name) form
-        if name=/^(#{attributes[:gem_package_name_prefix]})-([^\s]+)\s*(.*)$/.match(dependency)
-          "#{name[1]}(#{name[2]})#{name[3] ? " #{name[3]}" : ""}"
-        else
-          dependency
+      if !self.attributes[:rpm_verbatim_gem_dependencies?]
+        self.dependencies = self.dependencies.collect do |dependency|
+          # Tries to match rubygem_prefix [1], gem_name [2] and version [3] if present
+          # and return it in rubygem_prefix(gem_name) form
+          if name=/^(#{attributes[:gem_package_name_prefix]})-([^\s]+)\s*(.*)$/.match(dependency)
+            "#{name[1]}(#{name[2]})#{name[3] ? " #{name[3]}" : ""}"
+          else
+            dependency
+          end
         end
       end
     end
@@ -232,7 +277,7 @@ class FPM::Package::RPM < FPM::Package
           nextversion = version.split('.').collect { |v| v.to_i }
           nextversion[-1] += 1
           nextversion = nextversion.join(".")
-          @logger.warn("Converting dependency #{dep} to #{name} >= #{version}, #{name} < #{nextversion}")
+          logger.warn("Converting dependency #{dep} to #{name} >= #{version}, #{name} < #{nextversion}")
           ["#{name} >= #{version}", "#{name} < #{nextversion}"]
         else
           dep
@@ -240,7 +285,37 @@ class FPM::Package::RPM < FPM::Package
       end.flatten
     end
 
+  setscript = proc do |scriptname|
+      script_path = self.attributes[scriptname]
+      # Skip scripts not set
+      next if script_path.nil?
+      if !File.exists?(script_path)
+        logger.error("No such file (for #{scriptname.to_s}): #{script_path.inspect}")
+        script_errors	 << script_path
+      end
+      # Load the script into memory.
+      scripts[scriptname] = File.read(script_path)
+    end
+
+  setscript.call(:rpm_verifyscript)
+  setscript.call(:rpm_posttrans)
+  setscript.call(:rpm_pretrans)
   end # def converted
+
+  def rpm_get_trigger_type(flag)
+    puts "#{flag.to_s(2)}"
+    if (flag & (1 << 25)) == (1 << 25)
+       :rpm_trigger_before_install
+    elsif (flag & (1 << 16)) == (1 << 16)
+       :rpm_trigger_after_install
+    elsif (flag & (1 << 17)) == (1 << 17)
+       :rpm_trigger_before_uninstall
+    elsif (flag & (1 << 18)) == (1 << 18)
+       :rpm_trigger_after_target_uninstall
+    else
+       @logger.fatal("I don't know about this triggerflag ('#{flag}')")
+    end
+  end # def rpm_get_trigger
 
   def input(path)
     rpm = ::RPM::File.new(path)
@@ -266,11 +341,26 @@ class FPM::Package::RPM < FPM::Package
     self.scripts[:after_install] = tags[:postin]
     self.scripts[:before_remove] = tags[:preun]
     self.scripts[:after_remove] = tags[:postun]
+    self.scripts[:rpm_verifyscript] = tags[:verifyscript]
+    self.scripts[:rpm_posttrans] = tags[:posttrans]
+    self.scripts[:rpm_pretrans] = tags[:pretrans]
     # TODO(sissel): prefix these scripts above with a shebang line if there isn't one?
     # Also taking into account the value of tags[preinprog] etc, something like:
     #    #!#{tags[:preinprog]}
     #    #{tags[prein]}
-    # TODO(sissel): put 'trigger scripts' stuff into attributes
+
+    if !tags[:triggerindex].nil?
+      val = tags[:triggerindex].zip(tags[:triggername],tags[:triggerflags],tags[:triggerversion]).group_by{ |x| x[0]}
+      val = val.collect do |order,data|
+        new_data = data.collect { |x| [ x[1], rpm.operator(x[2]), x[3]].join(" ").strip}.join(", ")
+        [order, rpm_get_trigger_type(data[0][2]), new_data]
+      end
+      val.each do |order, attr,data|
+        self.attributes[attr] = [] if self.attributes[attr].nil?
+        scriptprog = (tags[:triggerscriptprog][order] == '/bin/sh') ? "" : "-p #{tags[:triggerscriptprog][order]}"
+        self.attributes[attr] << [data,tags[:triggerscripts][order],scriptprog]
+      end
+    end
 
     if !attributes[:no_auto_depends?]
       self.dependencies += rpm.requires.collect do |name, operator, version|
@@ -301,14 +391,26 @@ class FPM::Package::RPM < FPM::Package
     rpm.extract(staging_path)
   end # def input
 
+  def prefixed_path(path)
+    Pathname.new(path).absolute?() ? path : File.join(self.prefix, path)
+  end # def prefixed_path
+
   def output(output_path)
     output_check(output_path)
     %w(BUILD RPMS SRPMS SOURCES SPECS).each { |d| FileUtils.mkdir_p(build_path(d)) }
     args = ["rpmbuild", "-bb"]
 
+    if %x{uname -m}.chomp != self.architecture
+      rpm_target = self.architecture
+    end
+
     # issue #309
     if !attributes[:rpm_os].nil?
       rpm_target = "#{architecture}-unknown-#{attributes[:rpm_os]}"
+    end
+
+    # issue #707
+    if !rpm_target.nil?
       args += ["--target", rpm_target]
     end
 
@@ -317,6 +419,7 @@ class FPM::Package::RPM < FPM::Package
       "--define", "_topdir #{build_path}",
       "--define", "_sourcedir #{build_path}",
       "--define", "_rpmdir #{build_path}/RPMS",
+      "--define", "_tmppath #{attributes[:workdir]}"
     ]
 
     args += ["--sign"] if attributes[:rpm_sign?]
@@ -324,6 +427,7 @@ class FPM::Package::RPM < FPM::Package
     if attributes[:rpm_auto_add_directories?]
       fs_dirs_list = File.join(template_dir, "rpm", "filesystem_list")
       fs_dirs = File.readlines(fs_dirs_list).reject { |x| x =~ /^\s*#/}.map { |x| x.chomp }
+      fs_dirs.concat((attributes[:auto_add_exclude_directories] or []))
 
       Find.find(staging_path) do |path|
         next if path == staging_path
@@ -333,7 +437,7 @@ class FPM::Package::RPM < FPM::Package
         end
       end
     else
-      self.directories = self.directories.map { |x| File.join(self.prefix, x) }
+      self.directories = self.directories.map { |x| self.prefixed_path(x) }
       alldirs = []
       self.directories.each do |path|
         Find.find(File.join(staging_path, path)) do |subpath|
@@ -348,14 +452,24 @@ class FPM::Package::RPM < FPM::Package
     # scan all conf file paths for files and add them
     allconfigs = []
     self.config_files.each do |path|
-      cfg_path = File.expand_path(path, staging_path)
+      cfg_path = File.join(staging_path, path)
+      raise "Config file path #{cfg_path} does not exist" unless File.exist?(cfg_path)
       Find.find(cfg_path) do |p|
         allconfigs << p.gsub("#{staging_path}/", '') if File.file? p
       end
     end
     allconfigs.sort!.uniq!
 
-    self.config_files = allconfigs.map { |x| File.join(self.prefix, x) }
+    self.config_files = allconfigs.map { |x| File.join("/", x) }
+
+    # add init script if present
+    (attributes[:rpm_init_list] or []).each do |init|
+      name = File.basename(init, ".init")
+      dest_init = File.join(staging_path, "etc/init.d/#{name}")
+      FileUtils.mkdir_p(File.dirname(dest_init))
+      FileUtils.cp init, dest_init
+      File.chmod(0755, dest_init)
+    end
 
     (attributes[:rpm_rpmbuild_define] or []).each do |define|
       args += ["--define", define]
@@ -376,7 +490,7 @@ class FPM::Package::RPM < FPM::Package
 
     args << specfile
 
-    @logger.info("Running rpmbuild", :args => args)
+    logger.info("Running rpmbuild", :args => args)
     safesystem(*args)
 
     ::Dir["#{build_path}/RPMS/**/*.rpm"].each do |rpmpath|
@@ -392,11 +506,11 @@ class FPM::Package::RPM < FPM::Package
   def build_sub_dir
     return "BUILD"
     #return File.join("BUILD", prefix)
-  end # def prefix
+  end # def build_sub_dir
 
   def version
     if @version.kind_of?(String) and @version.include?("-")
-      @logger.warn("Package version '#{@version}' includes dashes, converting" \
+      logger.warn("Package version '#{@version}' includes dashes, converting" \
                    " to underscores")
       @version = @version.gsub(/-/, "_")
     end
@@ -409,7 +523,7 @@ class FPM::Package::RPM < FPM::Package
     return @epoch if @epoch.is_a?(Numeric)
 
     if @epoch.nil? or @epoch.empty?
-      @logger.warn("no value for epoch is set, defaulting to nil")
+      logger.warn("no value for epoch is set, defaulting to nil")
       return nil
     end
 
@@ -431,5 +545,5 @@ class FPM::Package::RPM < FPM::Package
 
   public(:input, :output, :converted_from, :architecture, :to_s, :iteration,
          :payload_compression, :digest_algorithm, :prefix, :build_sub_dir,
-         :epoch, :version)
+         :epoch, :version, :prefixed_path)
 end # class FPM::Package::RPM

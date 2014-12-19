@@ -41,7 +41,6 @@ Epoch: <%= epoch %>
 Release: <%= iteration or 1 %>
 <%# use the first line of the description as the summary -%>
 Summary: <%= description.split("\n").first.empty? ? "_" :  description.split("\n").first %>
-BuildArch: <%= architecture %>
 <% if !attributes[:rpm_autoreqprov?] -%>
 AutoReqProv: no
 <% else -%>
@@ -109,25 +108,105 @@ Obsoletes: <%= repl %>
 %clean
 # noop
 
-<%# This next section puts any %pre, %post, %preun, or %postun scripts %>
-<% 
+<%# This next section puts any %pre, %post, %preun, %postun, %verifyscript, %pretrans or %posttrans scripts %>
+<%
   scriptmap = {
-    :before_install => "pre",
-    :after_install => "post",
-    :before_remove => "preun",
-    :after_remove => "postun",
+    :rpm_verifyscript => "verifyscript",
+    :rpm_posttrans => "posttrans",
+    :rpm_pretrans => "pretrans"
   }
-  scriptmap.each do |name, rpmname| 
 -%>
+<% if script?(:before_upgrade) or script?(:after_upgrade) -%>
+<%   if script?(:before_upgrade) or script?(:before_install) -%>
+%pre
+upgrade() {
+<%     if script?(:before_upgrade) -%>
+<%=      script(:before_upgrade) %>
+<%     end -%>
+}
+install() {
+<%     if script?(:before_install) -%>
+<%=      script(:before_install) %>
+<%     end -%>
+}
+if [ "${1}" -eq 1 ]
+then
+    install
+    # "before install" goes here
+elif [ "${1}" -gt 1 ]
+then
+    upgrade
+fi
+<%   end -%>
+<%   if script?(:after_upgrade) or script?(:after_install) -%>
+%pre
+upgrade() {
+<%     if script?(:after_upgrade) -%>
+<%=      script(:after_upgrade) %>
+<%     end -%>
+}
+install() {
+<%     if script?(:after_install) -%>
+<%=      script(:after_install) %>
+<%     end -%>
+}
+if [ "${1}" -eq 1 ]
+then
+    install
+    # "before install" goes here
+elif [ "${1}" -gt 1 ]
+then
+    upgrade
+fi
+<%   end -%>
+<%   if script?(:before_remove) -%>
+%preun
+if [ "${1}" -eq 0 ]
+then
+<%=    script(:before_remove) %>
+fi
+<%   end -%>
+<%   if script?(:after_remove) -%>
+%postun
+if [ "${1}" -eq 0 ]
+then
+<%=    script(:after_remove) %>
+fi
+<%   end -%>
+<% else
+     other_scriptmap = {
+       :before_install => "pre",
+       :after_install => "post",
+       :before_remove => "preun",
+       :after_remove => "postun"
+     }
+     scriptmap.merge!(other_scriptmap)
+   end
+-%>
+<% scriptmap.each do |name, rpmname| -%>
 <%   if script?(name) -%>
-%<%= rpmname %>
-<%= script(name) %>
+%<%=   rpmname %>
+<%=    script(name) %>
+<%   end -%>
+<% end -%>
 
+<%# This section adds any triggers, as ordered in the command line -%>
+<%
+  triggermap = {
+    :before_install => "prein",
+    :after_install => "in",
+    :before_uninstall => "un",
+    :after_target_uninstall => "postun"
+  } 
+  triggermap.each do |name, rpmtype|
+    (attributes["rpm_trigger_#{name}".to_sym] or []).each do |trigger_name, trigger_script, trigger_scriptprog| -%>
+%trigger<%= rpmtype -%> <%= trigger_scriptprog -%> -- <%= trigger_name %>
+<%= trigger_script %>
 <%   end -%>
 <% end -%>
 
 %files
-%defattr(<%= attributes[:rpm_defattrfile] %>,<%= attributes[:rpm_user] %>,<%= attributes[:rpm_group] %>,<%= attributes[:rpm_defattrdir] %>)
+%defattr(<%= attributes[:rpm_defattrfile] %>,<%= attributes[:rpm_user] || "root" %>,<%= attributes[:rpm_group] || "root" %>,<%= attributes[:rpm_defattrdir] %>)
 <%# Output config files and then regular files. -%>
 <% config_files.each do |path| -%>
 %config(noreplace) <%= rpm_file_entry(path) %>

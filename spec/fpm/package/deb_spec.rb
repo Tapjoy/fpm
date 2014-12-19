@@ -1,15 +1,22 @@
 require "spec_setup"
+require 'fileutils'
 require "fpm" # local
 require "fpm/package/deb" # local
 require "fpm/package/dir" # local
 
 describe FPM::Package::Deb do
-  # dpkg-deb lets us query deb package files. 
+  # dpkg-deb lets us query deb package files.
   # Comes with debian and ubuntu systems.
   have_dpkg_deb = program_exists?("dpkg-deb")
   if !have_dpkg_deb
     Cabin::Channel.get("rspec") \
       .warn("Skipping some deb tests because 'dpkg-deb' isn't in your PATH")
+  end
+
+  have_lintian = program_exists?("lintian")
+  if !have_lintian
+    Cabin::Channel.get("rspec") \
+      .warn("Skipping some deb tests because 'lintian' isn't in your PATH")
   end
 
   after :each do
@@ -62,6 +69,12 @@ describe FPM::Package::Deb do
     end
   end
 
+  describe "use-file-permissions" do
+    it "should be nil by default" do
+      insist { subject.attributes[:deb_use_file_permissions?] }.nil?
+    end
+  end
+
   describe "#to_s" do
     it "should have a default output usable as a filename" do
       subject.name = "name"
@@ -100,9 +113,13 @@ describe FPM::Package::Deb do
     it "should replace underscores with dashes in the package name" do
       reject { subject.name }.include?("_")
     end
+
+    it "should replace spaces with dashes in the package name" do
+      reject { subject.name }.include?(" ")
+    end
   end
 
-  describe "#output" do 
+  describe "#output" do
     before :all do
       # output a package, use it as the input, set the subject to that input
       # package. This helps ensure that we can write and read packages
@@ -136,6 +153,14 @@ describe FPM::Package::Deb do
       @original.attributes[:deb_priority] = "fizzle"
       @original.attributes[:deb_field_given?] = true
       @original.attributes[:deb_field] = { "foo" => "bar" }
+
+      @original.attributes[:deb_meta_files] = %w[meta_test triggers].map { |fn|
+        File.expand_path("../../../fixtures/deb/#{fn}", __FILE__)
+      }
+
+      @original.attributes[:deb_interest] = ['asdf', 'hjkl']
+      @original.attributes[:deb_activate] = ['qwer', 'uiop']
+
       @original.output(@target)
 
       @input = FPM::Package::Deb.new
@@ -146,6 +171,38 @@ describe FPM::Package::Deb do
       @original.cleanup
       @input.cleanup
     end # after
+
+    context "when the deb's control section is extracted" do
+      before :all do
+        tmp_control = Tempfile.new("fpm-test-deb-control")
+        @control_extracted = tmp_control.path
+        tmp_control.unlink
+        system("dpkg-deb -e '#{@target}' '#{@control_extracted}'") or \
+          raise "couldn't extract test deb"
+      end
+
+      it "should have the requested meta file in the control archive" do
+        File.open(File.join(@control_extracted, 'meta_test')) do |f|
+          insist { f.read.chomp } == "asdf"
+        end
+      end
+
+      it "should have the requested triggers in the triggers file" do
+        triggers = File.open(File.join(@control_extracted, 'triggers')) do |f|
+          f.read
+        end
+        reject { triggers =~ /^interest from-meta-file$/ }.nil?
+        reject { triggers =~ /^interest asdf$/ }.nil?
+        reject { triggers =~ /^interest hjkl$/ }.nil?
+        reject { triggers =~ /^activate qwer$/ }.nil?
+        reject { triggers =~ /^activate uiop$/ }.nil?
+        insist { triggers[-1] } == ?\n
+      end
+
+      after :all do
+        FileUtils.rm_rf @control_extracted
+      end
+    end
 
     context "package attributes" do
       it "should have the correct name" do
@@ -210,7 +267,7 @@ describe FPM::Package::Deb do
       it "should have a custom field 'foo: bar'" do
         insist { dpkg_field("foo") } == "bar"
       end
-      
+
       it "should have the correct Conflicts" do
         insist { dpkg_field("Conflicts") } == "foo (<< 123)"
       end
@@ -221,7 +278,7 @@ describe FPM::Package::Deb do
     end
   end # #output
 
-  describe "#output with no depends" do 
+  describe "#output with no depends" do
     before :all do
       # output a package, use it as the input, set the subject to that input
       # package. This helps ensure that we can write and read packages
@@ -255,4 +312,82 @@ describe FPM::Package::Deb do
       insist { @input.dependencies }.empty?
     end
   end # #output with no dependencies
+
+  describe "#tar_flags" do
+    before :each do
+      tmpfile = Tempfile.new("fpm-test-deb")
+      @target = tmpfile.path
+      # The target file must not exist.
+      tmpfile.unlink
+      @package = FPM::Package::Deb.new
+      @package.name = "name"
+    end
+
+    after :each do
+      @package.cleanup
+    end # after
+
+    it "should set the user for the package's data files" do
+      @package.attributes[:deb_user] = "nobody"
+      # output a package so that @data_tar_flags is computed
+      insist { @package.data_tar_flags } == ["--owner", "nobody", "--numeric-owner", "--group", "0"]
+    end
+
+    it "should set the group for the package's data files" do
+      @package.attributes[:deb_group] = "nogroup"
+      # output a package so that @data_tar_flags is computed
+      insist { @package.data_tar_flags } == ["--numeric-owner", "--owner", "0", "--group", "nogroup"]
+    end
+
+    it "should not set the user or group for the package's data files if :deb_use_file_permissions? is not nil" do
+      @package.attributes[:deb_use_file_permissions?] = true
+      # output a package so that @data_tar_flags is computed
+      @package.output(@target)
+      insist { @package.data_tar_flags } == []
+    end
+  end # #tar_flags
+
+  describe "#output with lintian" do
+    before :all do
+      @staging_path = Dir.mktmpdir
+      tmpfile = Tempfile.new(["fpm-test-deb", ".deb"])
+      @target = tmpfile.path
+
+      # The target file must not exist.
+      tmpfile.unlink
+
+      FileUtils.cp_r(Dir['spec/fixtures/deb/staging/*'], @staging_path)
+
+      @deb = FPM::Package::Deb.new
+      @deb.name = "name"
+      @deb.version = "0.0.1"
+      @deb.maintainer = "Jordan Sissel <jls@semicomplete.com>"
+      @deb.description = "Test package\nExtended description."
+      @deb.attributes[:deb_user] = "root"
+      @deb.attributes[:deb_group] = "root"
+
+      @deb.instance_variable_set(:@config_files, ["/etc/init.d/test"])
+      @deb.instance_variable_set(:@staging_path, @staging_path)
+
+      @deb.output(@target)
+    end
+
+    after :all do
+      @deb.cleanup
+      FileUtils.rm_r @staging_path if File.exists? @staging_path
+    end # after
+
+    context "when run against lintian", :if => have_lintian do
+      lintian_errors_to_ignore = [
+        "no-copyright-file",
+        "init.d-script-missing-lsb-section",
+        "non-standard-file-permissions-for-etc-init.d-script"
+      ]
+
+      it "should return no errors" do
+        lintian_output = %x{lintian #{@target} --suppress-tags #{lintian_errors_to_ignore.join(",")}}
+        expect($?).to eq(0), lintian_output
+      end
+    end
+  end
 end # describe FPM::Package::Deb

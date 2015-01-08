@@ -1,3 +1,3 @@
 module FPM
-  VERSION = "1.1.4"
+  VERSION = "1.3.3.tj1"
 end

@@ -72,18 +72,24 @@ class FPM::Package::CPAN < FPM::Package
       else; metadata["license"]
     end
 
-    if metadata.include?("distribution")
-      @logger.info("Setting package name from 'distribution'",
+    unless metadata["distribution"].nil?
+      logger.info("Setting package name from 'distribution'",
                    :distribution => metadata["distribution"])
       self.name = fix_name(metadata["distribution"])
     else
-      @logger.info("Setting package name from 'name'",
+      logger.info("Setting package name from 'name'",
                    :name => metadata["name"])
       self.name = fix_name(metadata["name"])
     end
 
-    # Not all things have 'author' listed.
-    self.vendor = metadata["author"].join(", ") if metadata.include?("author")
+    # author is not always set or it may be a string instead of an array
+    self.vendor = case metadata["author"]
+      when String; metadata["author"]
+      when Array; metadata["author"].join(", ")
+      else
+        raise FPM::InvalidPackageConfiguration, "Unexpected CPAN 'author' field type: #{metadata["author"].class}. This is a bug."
+    end if metadata.include?("author")
+
     self.url = metadata["resources"]["homepage"] rescue "unknown"
 
     # TODO(sissel): figure out if this perl module compiles anything
@@ -92,7 +98,7 @@ class FPM::Package::CPAN < FPM::Package
 
     # Install any build/configure dependencies with cpanm.
     # We'll install to a temporary directory.
-    @logger.info("Installing any build or configure dependencies")
+    logger.info("Installing any build or configure dependencies")
 
     cpanm_flags = ["-L", build_path("cpan"), moduledir]
     cpanm_flags += ["-n"] if attributes[:cpan_test?]
@@ -102,7 +108,7 @@ class FPM::Package::CPAN < FPM::Package
     safesystem(attributes[:cpan_cpanm_bin], *cpanm_flags)
 
     if !attributes[:no_auto_depends?] 
-      if metadata.include?("requires") && !metadata["requires"].nil?
+      unless metadata["requires"].nil?
         metadata["requires"].each do |dep_name, version|
           # Special case for representing perl core as a version.
           if dep_name == "perl"
@@ -144,36 +150,13 @@ class FPM::Package::CPAN < FPM::Package
       # build/configure requirements.
       # META.yml calls it 'configure_requires' and 'build_requires'
       # META.json calls it prereqs/build and prereqs/configure
- 
+
       prefix = attributes[:prefix] || "/usr/local"
       # TODO(sissel): Set default INSTALL path?
 
       # Try Makefile.PL, Build.PL
       #
-      if File.exists?("Makefile.PL")
-        if attributes[:cpan_perl_lib_path]
-          perl_lib_path = attributes[:cpan_perl_lib_path]
-          safesystem(attributes[:cpan_perl_bin],
-                     "-Mlocal::lib=#{build_path("cpan")}",
-                     "Makefile.PL", "PREFIX=#{prefix}", "LIB=#{perl_lib_path}",
-                     # Empty install_base to avoid local::lib being used.
-                     "INSTALL_BASE=")
-        else 
-          safesystem(attributes[:cpan_perl_bin],
-                     "-Mlocal::lib=#{build_path("cpan")}",
-                     "Makefile.PL", "PREFIX=#{prefix}",
-                     # Empty install_base to avoid local::lib being used.
-                     "INSTALL_BASE=")
-        end
-        if attributes[:cpan_test?]
-          make = [ "env", "PERL5LIB=#{build_path("cpan/lib/perl5")}", "make" ]
-        else
-          make = [ "make" ]
-        end
-        safesystem(*make)
-        safesystem(*(make + ["test"])) if attributes[:cpan_test?]
-        safesystem(*(make + ["DESTDIR=#{staging_path}", "install"]))
-      elsif File.exists?("Build.PL")
+      if File.exists?("Build.PL")
         # Module::Build is in use here; different actions required.
         safesystem(attributes[:cpan_perl_bin],
                    "-Mlocal::lib=#{build_path("cpan")}",
@@ -197,6 +180,31 @@ class FPM::Package::CPAN < FPM::Package
                      # Empty install_base to avoid local::lib being used.
                      "--install_base", "")
         end
+      elsif File.exists?("Makefile.PL")
+        if attributes[:cpan_perl_lib_path]
+          perl_lib_path = attributes[:cpan_perl_lib_path]
+          safesystem(attributes[:cpan_perl_bin],
+                     "-Mlocal::lib=#{build_path("cpan")}",
+                     "Makefile.PL", "PREFIX=#{prefix}", "LIB=#{perl_lib_path}",
+                     # Empty install_base to avoid local::lib being used.
+                     "INSTALL_BASE=")
+        else
+          safesystem(attributes[:cpan_perl_bin],
+                     "-Mlocal::lib=#{build_path("cpan")}",
+                     "Makefile.PL", "PREFIX=#{prefix}",
+                     # Empty install_base to avoid local::lib being used.
+                     "INSTALL_BASE=")
+        end
+        if attributes[:cpan_test?]
+          make = [ "env", "PERL5LIB=#{build_path("cpan/lib/perl5")}", "make" ]
+        else
+          make = [ "make" ]
+        end
+        safesystem(*make)
+        safesystem(*(make + ["test"])) if attributes[:cpan_test?]
+        safesystem(*(make + ["DESTDIR=#{staging_path}", "install"]))
+
+
       else
         raise FPM::InvalidPackageConfiguration, 
           "I don't know how to build #{name}. No Makefile.PL nor " \
@@ -207,8 +215,9 @@ class FPM::Package::CPAN < FPM::Package
       # across packages.
       # https://github.com/jordansissel/fpm/issues/443
       # https://github.com/jordansissel/fpm/issues/510
-      ::Dir.glob(File.join(staging_path, prefix, "**/perllocal.pod")).each do |path|
-        @logger.debug("Removing useless file.",
+      glob_prefix = attributes[:cpan_perl_lib_path] || prefix
+      ::Dir.glob(File.join(staging_path, glob_prefix, "**/perllocal.pod")).each do |path|
+        logger.debug("Removing useless file.",
                       :path => path.gsub(staging_path, ""))
         File.unlink(path)
       end
@@ -223,7 +232,7 @@ class FPM::Package::CPAN < FPM::Package
     # native if found; otherwise keep the 'all' default.
     Find.find(staging_path) do |path|
       if path =~ /\.so$/  
-        @logger.info("Found shared library, setting architecture=native",
+        logger.info("Found shared library, setting architecture=native",
                      :path => path)
         self.architecture = "native" 
       end
@@ -242,7 +251,8 @@ class FPM::Package::CPAN < FPM::Package
   def download(metadata, cpan_version=nil)
     distribution = metadata["distribution"]
     author = metadata["author"]
-    @logger.info("Downloading perl module",
+
+    logger.info("Downloading perl module",
                  :distribution => distribution,
                  :version => cpan_version)
 
@@ -257,17 +267,35 @@ class FPM::Package::CPAN < FPM::Package
       end
     end
 
-    tarball = "#{distribution}-#{self.version}.tar.gz"
+    metacpan_release_url = "http://api.metacpan.org/v0/release/#{author}/#{distribution}-#{self.version}"
+    begin
+      release_response = httpfetch(metacpan_release_url)
+    rescue Net::HTTPServerException => e
+      logger.error("metacpan release query failed.", :error => e.message,
+                    :module => package, :url => metacpan_release_url)
+      raise FPM::InvalidPackageConfiguration, "metacpan release query failed"
+    end
+
+    data = release_response.body
+    release_metadata = JSON.parse(data)
+    archive = release_metadata["archive"]
+
+    # should probably be basepathed from the url 
+    tarball = File.basename(archive)
+
+    url_base = "http://www.cpan.org/"
+    url_base = "#{attributes[:cpan_mirror]}" if !attributes[:cpan_mirror].nil?
+
     #url = "http://www.cpan.org/CPAN/authors/id/#{author[0,1]}/#{author[0,2]}/#{author}/#{tarball}"
-    url = "http://www.cpan.org/authors/id/#{author[0,1]}/#{author[0,2]}/#{author}/#{tarball}"
-    @logger.debug("Fetching perl module", :url => url)
+    url = "#{url_base}/authors/id/#{author[0,1]}/#{author[0,2]}/#{author}/#{archive}"
+    logger.debug("Fetching perl module", :url => url)
     
     begin
       response = httpfetch(url)
     rescue Net::HTTPServerException => e
-      #@logger.error("Download failed", :error => response.status_line,
+      #logger.error("Download failed", :error => response.status_line,
                     #:url => url)
-      @logger.error("Download failed", :error => e, :url => url)
+      logger.error("Download failed", :error => e, :url => url)
       raise FPM::InvalidPackageConfiguration, "metacpan query failed"
     end
 
@@ -279,14 +307,14 @@ class FPM::Package::CPAN < FPM::Package
   end # def download
 
   def search(package)
-    @logger.info("Asking metacpan about a module", :module => package)
+    logger.info("Asking metacpan about a module", :module => package)
     metacpan_url = "http://api.metacpan.org/v0/module/" + package
     begin
       response = httpfetch(metacpan_url)
     rescue Net::HTTPServerException => e
-      #@logger.error("metacpan query failed.", :error => response.status_line,
+      #logger.error("metacpan query failed.", :error => response.status_line,
                     #:module => package, :url => metacpan_url)
-      @logger.error("metacpan query failed.", :error => e.message,
+      logger.error("metacpan query failed.", :error => e.message,
                     :module => package, :url => metacpan_url)
       raise FPM::InvalidPackageConfiguration, "metacpan query failed"
     end

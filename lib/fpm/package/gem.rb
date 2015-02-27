@@ -38,6 +38,11 @@ class FPM::Package::Gem < FPM::Package
     "shebang rewritten to use env?", :default => true
 
   option "--prerelease", :flag, "Allow prerelease versions of a gem", :default => false
+  option "--disable-dependency", "gem_name",
+    "The gem name to remove from dependency list",
+    :multivalued => true, :attribute_name => :gem_disable_dependencies
+
+  option "--version-bins", :flag, "Append the version to the bins", :default => false
 
   def input(gem)
     # 'arg'  is the name of the rubygem we should unpack.
@@ -57,13 +62,13 @@ class FPM::Package::Gem < FPM::Package
       path = download(gem, gem_version)
     end
 
-    @logger.info("Using gem file", :path => path)
+    logger.info("Using gem file", :path => path)
     return path
   end # def download_if_necessary
 
   def download(gem_name, gem_version=nil)
 
-    @logger.info("Trying to download", :gem => gem_name, :version => gem_version)
+    logger.info("Trying to download", :gem => gem_name, :version => gem_version)
 
     gem_fetch = [ "#{attributes[:gem_gem]}", "fetch", gem_name]
 
@@ -74,7 +79,7 @@ class FPM::Package::Gem < FPM::Package
     FileUtils.mkdir(download_dir) unless File.directory?(download_dir)
 
     ::Dir.chdir(download_dir) do |dir|
-      @logger.debug("Downloading in directory #{dir}")
+      logger.debug("Downloading in directory #{dir}")
       safesystem(*gem_fetch)
     end
 
@@ -147,6 +152,10 @@ class FPM::Package::Gem < FPM::Package
 
         # Some reqs can be ">= a, < b" versions, let's handle that.
         reqs.to_s.split(/, */).each do |req|
+          if attributes[:gem_disable_dependencies]
+            next if attributes[:gem_disable_dependencies].include?(dep.name)
+          end
+
           if attributes[:gem_fix_dependencies?]
             name = fix_name(dep.name)
           else
@@ -194,9 +203,14 @@ class FPM::Package::Gem < FPM::Package
     #       No such file or directory - /tmp/something/weird/bin
     tmp = bin_path
     while ::Dir.entries(tmp).size == 2 || tmp == "/"  # just [ "..", "." ] is an empty directory
-      @logger.info("Deleting empty bin_path", :path => tmp)
+      logger.info("Deleting empty bin_path", :path => tmp)
       ::Dir.rmdir(tmp)
       tmp = File.dirname(tmp)
+    end
+    if attributes[:gem_version_bins?] and File.directory?(bin_path)
+      (::Dir.entries(bin_path) - ['.','..']).each do |bin|
+        FileUtils.mv("#{bin_path}/#{bin}", "#{bin_path}/#{bin}-#{self.version}")
+      end
     end
   end # def install_to_staging
   

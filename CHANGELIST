@@ -1,5 +1,93 @@
-1.1.0 (???)
+1.3.3 (December 11, 2014)
+  - The fpm project now uses Contributor Covenant. You can read more about this on
+    the website: http://contributor-covenant.org/
+  - npm: Fix bug causing all `-s npm` attempts to fail due to a missing method.
+    This bug was introduced in 1.3.0. (#800, #806; Jordan Sissel)
+  - rpm: fix bug in rpm input causing a crash if the input rpm did not have any triggers
+    (#801, #802; Ted Elwartowski)
+
+1.3.2 (November 4, 2014)
+  - deb: conversion from another deb will automatically use any changelog found in 
+    the source deb (Jordan Sissel)
+
+1.3.1 (November 4, 2014)
+  - deb: fix md5sums generation such that `dpkg -V` now works (#799, Matteo Panella)
+  - rpm: Use maximum compression when choosing xz (#797, Ashish Kulkarni)
+  
+1.3.0 (October 25, 2014)
+  - Fixed a bunch of Ruby 1.8.7-related bugs. (Jordan Sissel)
+  - cpan: Fix bug in author handling (#744, Leon Weidauer)
+  - cpan: Better removal of perllocal.pod (#763, #443, #510, Mathias Lafeldt)
+  - rpm: Use lstat calls instead of stat, so we don't follow symlinks (#765, Shrijeet Paliwal)
+  - rpm and deb: Now supports script actions on upgrades. This adds two new flags:
+    --before-upgrade and --after-upgrade. (#772, #661; Daniel Haskin)
+  - rpm: Package triggers are now supported. New flags: --rpm-trigger-before-install,
+    --rpm-trigger-after-install, --rpm-trigger-before-uninstall, 
+    --rpm-trigger-after-target-uninstall. (#626, Maxime Caumartin)
+  - rpm: Add --rpm-init flag; similar to --deb-init. (Josh Dolitsky)
+  - sh: Skip installation if already installed for the given version. If forced,
+    the old installation is renamed. (#776, Chris Gerber)
+  - deb: Allow Vendor field to be omitted now by specifying `--vendor ""` (#778, Nate Brown)
+  - general: Add --log=level flag for setting log level. Levels are error, warn, info, debug. (Jordan SIssel)
+  - cpan: Check for Build.PL first before Makefile.PL (#787, Daniel Jay Haskin)
+  - dir: Don't follow symlinks when copying files (#658, Jordan Sissel)
+  - deb: Automatically provide a 'changes' file in debs because lintian
+    complains if they are missing. (#784, Jordan Sissel)
+  - deb: Fix and warn for package names that have spaces (#779, Grantlyk)
+  - npm: Automatically set the prefix to `npm prefix -g` (#758, Brady Wetherington and Jordan Sissel)
+
+1.2.0 (July 25, 2014)
+  - rpm: Add --rpm-verifyscript for adding a custom rpm verify script to
+    your package. (Remi Hakim)
+  - Allow the -p flag to target a directory for writing the output package
+    (#656, Jordan Sissel)
+  - Add --debug-workspace which skips any workspace cleanup to let users debug things
+    if they break. (#720, #734; Jordan Sissel)
+  - rpm: Add --rpm-attr for controlling attribute settings per file. This setting
+    will likely be removed in the future once rpmbuild is no longer needed.
+    (#719)
+  - deb: Add --deb-meta-file to add arbitrary files to the control dir (#599, Dan Brown)
+  - deb: Add --deb-interest and --deb-activate for adding package triggers (#595, Dan Brown)
+  - cpan: Fix small bug in handling empty metadata fields (#712, Mathias Lafeldt)
+  - rpm: Fix bug when specifying both --architecture and --rpm-os (#707, #716; Alan Ivey)
+  - gem: Fix bug where --gem-version-bins is given but package has no bins (#688, Jan Vansteenkiste)
+  - deb: Set permissions correct on the package's internals. Makes lintian happier. (Jan Vansteenkiste)
+  - rpm: rpmbuild's _tmppath now respects --workdir (#714, Jordan Sissel)
+  - gem/rpm: Add --rpm-verbatim-gem-dependencies to use old-style (fpm 0.4.x)
+    rpm gem dependencies (#724, Jordan Sissel)
+  - gem/rpm: Fix bug for gem pessimistic constraints when converting to rpm (Tom Duckering)
+  - python: Fix small bug with pip invocations (#727, Dane Knecht)
+
+1.1.0 (April 23, 2014)
   - New package type: zip, for converting to and from zip files (Jordan Sissel)
+  - New package type: sh, a self-extracting package installation shell archive. (#651, Chris Gerber)
+  - 'fpm --version' will now emit the version of fpm.
+  - rpm: supports packaging fifo files (Adam Stephens)
+  - deb: Add --deb-use-file-permissions (Adam Stephens)
+  - cpan: Improve how fpm tries to find cpan artifacts for download (#614, Tim Nicholas)
+  - gem: Add --gem-disable-dependency for removing one or more specific rubygem
+    dependencies from the automatically-generated list (#598, Derek Olsen)
+  - python: Add --python-scripts-executable for setting a custom interpreter to
+    use for the hashbang line at the top of may python package scripts.
+    (#628, Vladimir Rutsky)
+  - Allow absolute paths with --directories even when --prefix is used (Vladimir Rutsky)
+  - dir: Now correctly identifies hardlinked files and creates a package correctly
+    with that knowledge (#365, #623, #659; Vladimir Rutsky)
+  - rpm: Add --rpm-auto-add-exclude-directories for excluding directories
+    from the --rpm-auto-add-directories behavior (#640, Vladimir Rutsky)
+  - general: --config-files now accepts directories and will recursively mark any
+    files within as config files inside the package (#642, Vladimir Rutsky)
+  - general: If you specify a --config-files path that doesn't exist, you will
+    now get an error. (#654, Alan Franzoni)
+  - python: Support --python-pypi when using --python-pip (#652, David Lindquist)
+  - deb: Tests now try to make packages ensure we don't upset lintian (#648, Sam Crang)
+  - rpm: Fix architecture targeting (#676, Rob Kinyon)
+  - rpm: Allow --rpm-user and --rpm-group to override the user/group even if
+    --rpm-use-file-permissions is enabled. (#679, Jordan Sissel)
+  - gem: Add --gem-version-bins for appending the gem version to the file name
+    of executable scripts a rubygem may install. (Jan Vansteenkiste)
+  - python: Attempt to provide better error messages for known issues in python
+    environments (#664, Jordan Sissel)
 
 1.0.2 (January 10, 2013)
   - rpm: No longer converts - to _ in dependency strings (#603, Bulat

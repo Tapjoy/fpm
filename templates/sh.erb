@@ -238,20 +238,35 @@ function revert_symlinks(){
 function clean_out_old_releases(){
     [ -n "$USE_FLAT_RELEASE_DIRECTORY" ] && return
 
-    if [ -n "$OLD_CURRENT_TARGET" ] ; then
-        # exclude old 'current' from deletions
-        while [ $(ls -tr "${RELEASES_DIR}" | grep -v ^$(basename "${OLD_CURRENT_TARGET}")$ | wc -l) -gt 2 ] ; do
-            OLDEST_RELEASE=$(ls -tr "${RELEASES_DIR}" | grep -v ^$(basename "${OLD_CURRENT_TARGET}")$ | head -1)
-            log "Deleting old release '${OLDEST_RELEASE}'"
-            rm -rf "${RELEASES_DIR}/${OLDEST_RELEASE}"
-        done
-    else
-        while [ $(ls -tr "${RELEASES_DIR}" | wc -l) -gt 2 ] ; do
-            OLDEST_RELEASE=$(ls -tr "${RELEASES_DIR}" | head -1)
-            log "Deleting old release '${OLDEST_RELEASE}'"
-            rm -rf "${RELEASES_DIR}/${OLDEST_RELEASE}"
-        done
-    fi
+    while [ $(releases_to_clean | wc -w) -gt 2 ] ; do
+        OLDEST_RELEASE=$(releases_to_clean | awk '{print $1}')
+        log "Deleting old release '${OLDEST_RELEASE}'"
+        mv "${OLDEST_RELEASE}" /home/deployer/
+    done
+
+}
+
+function releases_to_clean(){
+    local release_array=()
+
+    for r in $(ls -tr "${RELEASES_DIR}") ; do
+        release_array=(${release_array[@]} "${RELEASES_DIR}/${r}")
+    done
+    local releases_to_remove=()
+
+    for i in ${release_array[@]} ; do
+        if [ "$i" == "$OLD_CURRENT_TARGET" ] ; then
+           log "Not remvoing ${i}"
+        else
+            if [ $(ls -ld "${i}" | awk '{print $3}') == "$USER" ] ; then
+                releases_to_remove=(${releases_to_remove[@]} ${i})
+            else
+                log "${USER} doesn't own ${i}. Skipping removal."
+            fi
+        fi
+    done
+
+    echo  ${releases_to_remove[@]}
 }
 
 function print_package_metadata(){

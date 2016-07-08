@@ -1,3 +1,4 @@
 module FPM
-  VERSION = "1.3.4"
+  # Use the 4th number for TJ specific version
+  VERSION = "1.3.5.1"
 end

@@ -21,14 +21,14 @@ Gem::Specification.new do |spec|
   # For parsing JSON (required for some Python support, etc)
   # http://flori.github.com/json/doc/index.html
   spec.add_dependency("json", ">= 1.7.7") # license: Ruby License
-  
+
   # For logging
   # https://github.com/jordansissel/ruby-cabin
-  spec.add_dependency("cabin", ">= 0.6.0") # license: Apache 2 
+  spec.add_dependency("cabin", ">= 0.6.0") # license: Apache 2
 
   # For backports to older rubies
   # https://github.com/marcandre/backports
-  spec.add_dependency("backports", ">= 2.6.2") # license: MIT
+  spec.add_dependency("backports", "2.6.7") # license: MIT
 
   # For reading and writing rpms
   spec.add_dependency("arr-pm", "~> 0.0.9") # license: Apache 2
@@ -57,4 +57,3 @@ Gem::Specification.new do |spec|
   spec.email = "jls@semicomplete.com"
   spec.homepage = "https://github.com/jordansissel/fpm"
 end
-

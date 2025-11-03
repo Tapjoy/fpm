@@ -1,6 +1,11 @@
 Release Notes and Change Log
 ============================
 
+1.17.1 (October 30, 2025) TJ Fork
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+*  Filter newer style bash functions out of shell script template's .install-metadata file.
+
 1.17.0 (October 2, 2025)
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
